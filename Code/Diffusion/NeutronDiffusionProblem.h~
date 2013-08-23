@@ -1,0 +1,540 @@
+#ifndef neutronics_h_
+#define neutronics_h_
+
+//Global Headers
+#include "../Global/GlobalHeaders.h"
+#include "../Global/Deal2Headers.h"
+#include "../Global/Constants.h"
+
+#include "MaterialData.h"
+#include "EnergyGroup.h"
+
+#include "../TH/HeatConduction.h"
+
+//================================================================
+  template <int dim>
+  class Neutronics
+  {
+    public:
+      class Parameters
+      {
+        public:
+          Parameters ();
+
+          static void declare_parameters (ParameterHandler &prm);
+          void get_parameters (ParameterHandler &prm);
+
+          unsigned int n_groups;
+          unsigned int n_refinement_cycles;
+
+          unsigned int fe_degree;
+
+          double convergence_tolerance;
+      };
+
+      // Constructor
+      NeutronDiffusionProblem (const Parameters &parameters);
+
+      // Destructor
+      ~NeutronDiffusionProblem ();
+
+      // Calculation Subroutines
+      void eigenvalue_calc ();
+      void adjoint_calc ();
+      void run_time_step (double dt);
+
+      // Manipulators
+      void set_prob_type (int p_type) {prob_type=p_type;}
+      
+      // Accessors
+      double get_max_time ();
+      double get_min_time ();
+      double get_max_dt ();
+      double get_min_dt ();
+
+    private:
+      void initialize_problem();
+
+      double get_total_fission_source () const;
+
+      int prob_type;
+      const Parameters  &parameters;
+      const MaterialData material_data;
+      FE_Q<dim>          fe;
+
+      double k_eff;
+
+      std::vector<EnergyGroup<dim>*> energy_groups;
+
+      enum Extrapolation
+      {
+        linear,
+        pointwise,
+        global,
+        PRKE
+      };
+
+      enum problem_type {
+        eigen,
+        fixed
+      };
+
+  };
+
+//================================================================
+  // Parameters Constructor
+  template <int dim>
+  NeutronDiffusionProblem<dim>::Parameters::Parameters ()
+                  :
+                  n_groups (2),
+                  n_refinement_cycles (5),
+                  fe_degree (2),
+                  convergence_tolerance (1e-12)
+  {}
+
+//================================================================
+  // declare_parameters
+  template <int dim>
+  void NeutronDiffusionProblem<dim>::Parameters::declare_parameters (ParameterHandler &prm)
+  {
+    prm.declare_entry ("Number of energy groups", "2",
+                       Patterns::Integer (),
+                       "The number of energy different groups considered");
+    prm.declare_entry ("Refinement cycles", "5",
+                       Patterns::Integer (),
+                       "Number of refinement cycles to be performed");
+    prm.declare_entry ("Finite element degree", "2",
+                       Patterns::Integer (),
+                       "Polynomial degree of the finite element to be used");
+    prm.declare_entry ("Power iteration tolerance", "1e-12",
+                       Patterns::Double (),
+                       "Inner power iterations are stopped when the change in k_eff falls "
+                       "below this tolerance");
+  }
+
+//================================================================
+  // get_parameters
+  template <int dim>
+  void NeutronDiffusionProblem<dim>::Parameters::get_parameters (ParameterHandler &prm)
+  {
+    n_groups              = prm.get_integer ("Number of energy groups");
+    n_refinement_cycles   = prm.get_integer ("Refinement cycles");
+    fe_degree             = prm.get_integer ("Finite element degree");
+    convergence_tolerance = prm.get_double ("Power iteration tolerance");
+  }
+
+//================================================================
+  // NeutronDiffusionProblem Constructor
+  template <int dim>
+  NeutronDiffusionProblem<dim>::
+  NeutronDiffusionProblem (const Parameters &parameters)
+                  :
+                  parameters (parameters),
+                  material_data (parameters.n_groups),
+                  fe (parameters.fe_degree)
+  {}
+
+//================================================================
+  // NeutronDiffusionProblem Destructor
+  template <int dim>
+  NeutronDiffusionProblem<dim>::~NeutronDiffusionProblem ()
+  {
+    for (unsigned int group=0; group<energy_groups.size(); ++group)
+      delete energy_groups[group];
+
+    energy_groups.resize (0);
+  }
+
+//================================================================
+  // initialize_problem
+  template <int dim>
+  void NeutronDiffusionProblem<dim>::initialize_problem()
+  {
+    const unsigned int rods_per_assembly_x = 17,
+                       rods_per_assembly_y = 17;
+    const double pin_pitch_x = 1.26,
+                 pin_pitch_y = 1.26;
+    const double assembly_height = 200;
+
+    const unsigned int assemblies_x = 2,
+                       assemblies_y = 2,
+                       assemblies_z = 1;
+
+    const Point<dim> bottom_left = Point<dim>();
+    const Point<dim> upper_right = (dim == 2
+                                    ?
+                                    Point<dim> (assemblies_x*rods_per_assembly_x*pin_pitch_x,
+                                                assemblies_y*rods_per_assembly_y*pin_pitch_y)
+                                    :
+                                    Point<dim> (assemblies_x*rods_per_assembly_x*pin_pitch_x,
+                                                assemblies_y*rods_per_assembly_y*pin_pitch_y,
+                                                assemblies_z*assembly_height));
+
+    std::vector<unsigned int> n_subdivisions;
+    n_subdivisions.push_back (assemblies_x*rods_per_assembly_x);
+    if (dim >= 2)
+      n_subdivisions.push_back (assemblies_y*rods_per_assembly_y);
+    if (dim >= 3)
+      n_subdivisions.push_back (assemblies_z);
+
+    Triangulation<dim> mesh;
+    GridGenerator::subdivided_hyper_rectangle (mesh,
+                                               n_subdivisions,
+                                               bottom_left,
+                                               upper_right,
+                                               true);
+
+
+    const unsigned int n_assemblies=4;
+    const unsigned int assembly_materials[n_assemblies][rods_per_assembly_x][rods_per_assembly_y]
+      = {
+          {
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 5, 1, 1, 5, 1, 1, 5, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 5, 1, 1, 5, 1, 1, 5, 1, 1, 5, 1, 1, 5, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 5, 1, 1, 5, 1, 1, 7, 1, 1, 5, 1, 1, 5, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 5, 1, 1, 5, 1, 1, 5, 1, 1, 5, 1, 1, 5, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 5, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 5, 1, 1, 5, 1, 1, 5, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
+          },
+          {
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 8, 1, 1, 8, 1, 1, 8, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 8, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 8, 1, 1, 8, 1, 1, 8, 1, 1, 8, 1, 1, 8, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 8, 1, 1, 8, 1, 1, 7, 1, 1, 8, 1, 1, 8, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 8, 1, 1, 8, 1, 1, 8, 1, 1, 8, 1, 1, 8, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 8, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 8, 1, 1, 8, 1, 1, 8, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+                { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }
+          },
+          {
+                { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 },
+                { 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2 },
+                { 2, 3, 3, 3, 3, 5, 3, 3, 5, 3, 3, 5, 3, 3, 3, 3, 2 },
+                { 2, 3, 3, 5, 3, 4, 4, 4, 4, 4, 4, 4, 3, 5, 3, 3, 2 },
+                { 2, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 2 },
+                { 2, 3, 5, 4, 4, 5, 4, 4, 5, 4, 4, 5, 4, 4, 5, 3, 2 },
+                { 2, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 2 },
+                { 2, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 2 },
+                { 2, 3, 5, 4, 4, 5, 4, 4, 7, 4, 4, 5, 4, 4, 5, 3, 2 },
+                { 2, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 2 },
+                { 2, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 2 },
+                { 2, 3, 5, 4, 4, 5, 4, 4, 5, 4, 4, 5, 4, 4, 5, 3, 2 },
+                { 2, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 2 },
+                { 2, 3, 3, 5, 3, 4, 4, 4, 4, 4, 4, 4, 3, 5, 3, 3, 2 },
+                { 2, 3, 3, 3, 3, 5, 3, 3, 5, 3, 3, 5, 3, 3, 3, 3, 2 },
+                { 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2 },
+                { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 }
+          },
+          {
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 },
+                { 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6 }
+          }
+    };
+
+    const unsigned int core[assemblies_x][assemblies_y][assemblies_z]
+      =  {{{0}, {2}}, {{2}, {0}}};
+
+
+    for (typename Triangulation<dim>::active_cell_iterator
+           cell = mesh.begin_active();
+         cell!=mesh.end();
+         ++cell)
+      {
+        const Point<dim> cell_center = cell->center();
+
+        const unsigned int tmp_x = int(cell_center[0]/pin_pitch_x);
+        const unsigned int ax = tmp_x/rods_per_assembly_x;
+        const unsigned int cx = tmp_x - ax * rods_per_assembly_x;
+
+        const unsigned tmp_y = int(cell_center[1]/pin_pitch_y);
+        const unsigned int ay = tmp_y/rods_per_assembly_y;
+        const unsigned int cy = tmp_y - ay * rods_per_assembly_y;
+
+        const unsigned int az = (dim == 2
+                                 ?
+                                 0
+                                 :
+                                 int (cell_center[dim-1]/assembly_height));
+
+        Assert (ax < assemblies_x, ExcInternalError());
+        Assert (ay < assemblies_y, ExcInternalError());
+        Assert (az < assemblies_z, ExcInternalError());
+
+        Assert (core[ax][ay][az] < n_assemblies, ExcInternalError());
+
+        Assert (cx < rods_per_assembly_x, ExcInternalError());
+        Assert (cy < rods_per_assembly_y, ExcInternalError());
+
+        cell->set_material_id(assembly_materials[core[ax][ay][az]][cx][cy] - 1);
+      }
+
+
+    energy_groups.resize (parameters.n_groups);
+    for (unsigned int group=0; group<parameters.n_groups; ++group)
+      energy_groups[group] = new EnergyGroup<dim> (group, material_data,
+                                                   mesh, fe);
+  }
+
+//================================================================
+  // get_total_fission_source
+  template <int dim>
+  double NeutronDiffusionProblem<dim>::get_total_fission_source () const
+  {
+    std::vector<Threads::Thread<double> > threads;
+    for (unsigned int group=0; group<parameters.n_groups; ++group)
+      threads.push_back (Threads::new_thread (&EnergyGroup<dim>::get_fission_source,
+                                              *energy_groups[group]));
+
+    double fission_source = 0;
+    for (unsigned int group=0; group<parameters.n_groups; ++group)
+      fission_source += threads[group].return_value ();
+
+    return fission_source;
+  }
+
+//================================================================
+
+/*
+  template <int dim>
+  void NeutronDiffusionProblem<dim>::refine_grid ()
+  {
+    std::vector<unsigned int> n_cells (parameters.n_groups);
+    for (unsigned int group=0; group<parameters.n_groups; ++group)
+      n_cells[group] = energy_groups[group]->n_active_cells();
+
+    BlockVector<float>  group_error_indicators(n_cells);
+
+    {
+      Threads::ThreadGroup<> threads;
+      for (unsigned int group=0; group<parameters.n_groups; ++group)
+        threads += Threads::new_thread (&EnergyGroup<dim>::estimate_errors,
+                                        *energy_groups[group],
+                                        group_error_indicators.block(group));
+      threads.join_all ();
+    }
+
+    const float max_error         = group_error_indicators.linfty_norm();
+    const float refine_threshold  = 0.3*max_error;
+    const float coarsen_threshold = 0.01*max_error;
+
+    {
+      Threads::ThreadGroup<> threads;
+      for (unsigned int group=0; group<parameters.n_groups; ++group)
+        threads += Threads::new_thread (&EnergyGroup<dim>::refine_grid,
+                                        *energy_groups[group],
+                                        group_error_indicators.block(group),
+                                        refine_threshold,
+                                        coarsen_threshold);
+      threads.join_all ();
+    }
+  }
+*/
+
+//================================================================
+// Eigenvalue Calculation Subroutine
+template <int dim>
+void NeutronDiffusionProblem<dim>::eigenvalue_calc () 
+{
+    std::cout << std::setprecision (12) << std::fixed;
+
+    double k_eff_old = k_eff;
+    unsigned int cycle = 1;
+
+    Timer timer;
+    timer.start ();
+
+    initialize_problem();
+
+    for (unsigned int group=0; group<parameters.n_groups; ++group)
+      energy_groups[group]->setup_linear_system ();
+
+    std::cout << "   Numbers of active cells:       ";
+    for (unsigned int group=0; group<parameters.n_groups; ++group)
+      std::cout << energy_groups[group]->n_active_cells()
+                << ' ';
+    std::cout << std::endl;
+    std::cout << "   Numbers of degrees of freedom: ";
+    for (unsigned int group=0; group<parameters.n_groups; ++group)
+      std::cout << energy_groups[group]->n_dofs()
+                    << ' ';
+    std::cout << std::endl << std::endl;
+
+
+    Threads::ThreadGroup<> threads;
+    for (unsigned int group=0; group<parameters.n_groups; ++group)
+      threads += Threads::new_thread
+                 (&EnergyGroup<dim>::assemble_system_matrix,
+                  *energy_groups[group]);
+    threads.join_all ();
+    
+    // Begin Iteration Loop
+    double error;
+    unsigned int iteration = 1;
+    do
+      {
+        for (unsigned int group=0; group<parameters.n_groups; ++group)
+          {
+            energy_groups[group]->assemble_ingroup_rhs (ZeroFunction<dim>());
+
+            for (unsigned int bgroup=0; bgroup<parameters.n_groups; ++bgroup)
+              energy_groups[group]->assemble_cross_group_rhs (*energy_groups[bgroup]);
+
+            energy_groups[group]->solve ();
+          }
+
+        k_eff = get_total_fission_source();
+        error = fabs(k_eff-k_eff_old)/fabs(k_eff);
+        std::cout << "   Iteration " << iteration
+                  << ": k_eff=" << k_eff
+                  << std::endl;
+        k_eff_old=k_eff;
+
+        for (unsigned int group=0; group<parameters.n_groups; ++group)
+          {
+            energy_groups[group]->sol0 = energy_groups[group]->sol;
+            energy_groups[group]->sol0 /= k_eff;
+          }
+
+        ++iteration;
+      }
+    while((error > parameters.convergence_tolerance) && (iteration < 500));
+
+    for (unsigned int group=0; group<parameters.n_groups; ++group)
+      energy_groups[group]->output_results (cycle);
+
+
+    std::cout << std::endl << std::endl;
+}
+
+//================================================================
+// Adjoint Calculation Subroutine
+template<int dim>
+void NeutronDiffusionProblem<dim>::adjoint_calc () {
+
+
+  return;
+}
+
+//================================================================
+// Time-Step Calculation Subroutine
+template<int dim>
+void NeutronDiffusionProblem<dim>::run_time_step (double dt) {
+  
+  Vector<double> soltemp;
+  
+  return;
+}
+
+//================================================================
+// Maximum Time Calculation Subroutine
+template<int dim>
+double NeutronDiffusionProblem<dim>::get_max_time () {
+  
+  double tempt;
+  double ttime (0.0);
+  unsigned int nerg = NeutronDiffusionProblem<dim>::n_groups;
+  
+  for (unsigned int i=0;i<nerg;++i)
+  {
+    tempt = NeutronDiffusionProblem<dim>::energy_groups.time;
+    if (tempt > ttime) {ttime = tempt;}
+  }
+  
+  return ttime;
+}
+
+//================================================================
+// Minimum Time Calculation Subroutine
+template<int dim>
+double NeutronDiffusionProblem<dim>::get_min_time () {
+  
+  double tempt;
+  double ttime = Constants::large;
+  unsigned int nerg = NeutronDiffusionProblem<dim>::n_groups;
+  
+  for (unsigned int i=0;i<nerg;++i)
+  {
+    tempt = NeutronDiffusionProblem<dim>::energy_groups.time;
+    if (tempt < ttime) {ttime = tempt;}
+  }
+  
+  return ttime;
+}
+
+//================================================================
+// Maximum Dt Calculation Subroutine
+template<int dim>
+double NeutronDiffusionProblem<dim>::get_max_dt () {
+  
+  double tempt;
+  double dtt (0.0);
+  unsigned int nerg = NeutronDiffusionProblem<dim>::n_groups;
+  
+  for (unsigned int i=0;i<nerg;++i)
+  {
+    tempt = NeutronDiffusionProblem<dim>::energy_groups.dtkin;
+    if (tempt > dtt) {dtt = tempt;}
+  }
+  
+  
+  return dtt;
+}
+
+//================================================================
+// Minimum Dt Calculation Subroutine
+template<int dim>
+double NeutronDiffusionProblem<dim>::get_min_dt () {
+  
+  double tempt;
+  double dtt = Constants::large;
+  unsigned int nerg = NeutronDiffusionProblem<dim>::n_groups;
+  
+  for (unsigned int i=0;i<nerg;++i)
+  {
+    tempt = NeutronDiffusionProblem<dim>::energy_groups.time;
+    if (tempt < dtt) {dtt = tempt;}
+  }
+  
+  
+  return dtt;
+}
+//================================================================
+
+#endif
+
+

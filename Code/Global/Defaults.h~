@@ -1,0 +1,26 @@
+//===========================================================================//
+/*!
+ * \class Defaults
+ * \brief
+ *
+ * List of all Defaults Values
+ */
+//===========================================================================//
+
+#ifndef DEFAULTS_H
+#define DEFAULTS_H
+
+#include "GlobalHeaders.h"
+#include "Constants.h"
+
+namespace Defaults
+{
+    const double tolerance (1e-12);
+    const unsigned int n_groups (2);
+    const unsigned int n_precs (6);
+    const unsigned int phys_type (Constants::Physics_Neutronics_Only);
+    const unsigned int extrap_method (Constants::no_extrap);
+    const unsigned int fe_degree (2);
+}
+
+#endif

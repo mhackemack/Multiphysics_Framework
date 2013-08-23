@@ -1,0 +1,146 @@
+//===========================================================================//
+/*!
+ * \class Constants
+ * \brief
+ *
+ * List of all Constant Values
+ */
+//===========================================================================//
+
+#ifndef CONSTANTS_H
+#define CONSTANTS_H
+
+#include "GlobalHeaders.h"
+
+namespace Constants 
+{
+  // Miscellaneous Constants
+  const double PI(3.1415926535897932384626433832795);
+  const double SMALL(1e-15);
+  const double LARGE(1e16);
+  const double MAX_ITERATION(5000);
+  
+  // Physical Constants
+  const double SPEED_OF_LIGHT(2.9979245e8);         // [m/s]
+  const double AVOGADRO_NUMBER(6.022045e23);        // [1/mol]
+  const double BOLTZMANN_CONSTANT(0.861735e-4);     // [eV/K]
+  const double PLANCK_CONSTANT(6.626176e-34);       // [J/Hz]
+  const double GAS_CONSTANT(8.31441);               // [J/mol-K]
+  const double ENERGY_FROM_FISS(200);               // [MeV]
+  
+  // Atomic Constants
+  const double ELECTRON_MASS(0.511034);             // [MeV]
+  const double NEUTRON_MASS(939.5731);              // [MeV]
+  const double PROTON_MASS(938.2796);               // [MeV]
+  
+  // Conversions
+  const double EV_TO_J(1.6021892e-19);
+  const double MEV_TO_J(1.6021892e-13);
+  const double J_TO_MEV(1.0);
+  const double AMU_TO_KG(1.6605655e-27);
+  const double AMU_TO_MEV(931.5016);
+  const double K_TO_EV(8.617065e-5);
+  
+  // Strings
+  const std::string input_str("/home/michael/Multiphysics/Framework/input/");
+  const std::string output_str("/home/michael/Multiphysics/Framework/post/");
+  
+  // Enumerations
+  enum Extrapolation
+  {
+    no_extrap,
+    linear,
+    pointwise,
+    global,
+    PRKE
+  };
+
+  enum problem_type
+  {
+    steady,
+    transient
+  };
+  
+  enum time_Integration_Method 
+  {
+    BACKWARD_EULER,
+    FORWARD_EULER,
+    CRANK_NICHOLSON,
+    TBDF_2,
+    RUNGE_KUTTA_4
+  };
+  
+  enum physics_type
+  {
+    Physics_Neutronics_Only,
+    Physics_TH_Only,
+    Physics_Both
+  };
+  
+  enum physics_coupling
+  {
+    synchronous,
+    full_synchronous,
+    asynchronous,
+    full_asynchronous,
+    TwoStep,
+    JFNK
+  };
+  
+  enum physics_time_integrator
+  {
+    full_implicit,
+    linearized_implicit,
+    PCQS,
+    IQS
+  };
+  
+  enum PRKE_amplitude_count
+  {
+    amplitude_count_single,
+    amplitude_count_MG
+  };
+  
+  enum properties_temperature_dependence
+  {
+    prop_table,
+    prop_quadratic,
+    prop_cubic,
+    prop_RAMONA_XS
+  };
+  
+  enum time_step_selection
+  {
+    manual,
+    automatic,
+    full_automatic // Only for running synchronously at fastest physics period
+  };
+  
+  enum time_step_estimator
+  {
+    absolute_trunc_err,
+    relative_trunc_err,
+    max_local_period,
+    max_local_period_exp
+  };
+  
+  enum Thermal_Hydraulics_Type 
+  {
+    Heat_Conduction,
+    WIGL,
+    Full_TH
+  };
+  
+  enum Physical_Property
+  {
+    UO2,
+    PuO2,
+    MOX,
+    Water,
+    Helium,
+    Zircaloy
+  };
+  
+}
+
+#endif //CONSTANTS_H

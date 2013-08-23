@@ -1,0 +1,618 @@
+//======================================================================================================================
+/*!
+ * \class ParameterHandlerFunctions
+ * \brief
+ *
+ * Routine to print out different headers.
+ */
+//======================================================================================================================
+
+#ifndef PARAMETER_HANDLER_FUNCTIONS_H
+#define PARAMETER_HANDLER_FUNCTIONS_H
+
+#include "../Global/GlobalHeaders.h"
+#include "../Global/Deal2Headers.h"
+#include "../Global/Constants.h"
+
+//======================================================================================================================
+// Declare all project parameters and read file
+void declare_project_parameters (ParameterHandler &prm, std::string filename)
+{
+
+    filename += "project.prm";
+    
+    // Declare and Extract Entries
+    prm.declare_entry ("Problem Name", "none", Patterns::DirectoryName ());
+    prm.declare_entry ("ndim", "2", Patterns::Integer ());
+    prm.declare_entry ("n_materials", "1", Patterns::Integer ());
+    prm.declare_entry ("FE degree", "2", Patterns::Integer ());
+    prm.declare_entry ("tolerance", "1e-10", Patterns::Double ());
+    prm.declare_entry ("Physics Type", "0", Patterns::Integer ());
+    prm.declare_entry ("Number Synch Points", "0", Patterns::Integer ());
+    prm.declare_entry ("Temperature Dependence","false", Patterns::Bool ());
+    prm.declare_entry ("Print Output","false", Patterns::Bool ());
+    prm.declare_entry ("Steady-State Physics Coupling", "0", Patterns::Integer ());
+    
+    prm.read_input (filename, true);
+        
+    return;
+}
+
+//======================================================================================================================
+// Declare all kinetics parameters and read file
+void declare_kinetics_parameters (ParameterHandler &prm, std::string filename)
+{
+    filename += "kinetics.prm";
+    
+    ParameterHandler    proj_handler;
+    unsigned int        n_materials;
+    bool                temp_dep;
+    
+    declare_project_parameters (proj_handler, filename);
+    temp_dep = proj_handler.get_bool ("Temperature Dependence");
+    n_materials = proj_handler.get_integer ("n_materials");
+    
+    prm.declare_entry ("n_erg", "2", Patterns::Integer ());
+    prm.declare_entry ("n_prec", "6", Patterns::Integer ());
+    prm.declare_entry ("Kinetics Coupling", "0", Patterns::Integer ());
+    prm.declare_entry ("Extrapolation Method", "0", Patterns::Integer ());
+    prm.declare_entry ("tolerance", "1e-10", Patterns::Double ());
+    prm.declare_entry ("Initial Power", "1.0", Patterns::Double ());
+    prm.declare_entry ("Adjoint Weighting", "false", Patterns::Bool ());
+    
+    if (temp_dep)
+    {
+      // Get Number of Temperature Points for Each Material
+        prm.enter_subsection ("Number of Temperature Points");
+        
+          for (unsigned int m = 0; m < n_materials; ++m)
+          {
+            const unsigned int dm (Utilities::needed_digits(m+1));
+            prm.declare_entry ("Material " + Utilities::int_to_string(m+1,dm) + " Point Count", "1", Patterns::Integer ());
+          }
+        
+        prm.leave_subsection ();
+    }
+    
+    prm.read_input (filename, true);
+        
+    return;
+}
+
+//======================================================================================================================
+// Declare all thermal hydraulics parameters and read file
+void declare_TH_parameters (ParameterHandler &prm, std::string folder_name)
+{
+
+    // Local Parameter Handler Classes and Other Local Variables
+    ParameterHandler    proj_handler;
+    std::string         proj_filename = folder_name + "project.prm"; 
+    std::string         TH_filename = folder_name + "TH.prm"; 
+    unsigned int        n_materials;
+    bool                temp_dep;
+    
+    declare_project_parameters (proj_handler, folder_name);
+    n_materials = proj_handler.get_integer ("n_materials");
+    temp_dep = proj_handler.get_bool ("Temperature Dependence");
+    
+    prm.declare_entry ("tolerance", "1.0e-10", Patterns::Double ());
+    prm.declare_entry ("Dirichlet Temperature", "500", Patterns::Double ());
+    prm.declare_entry ("Bulk Coolant Temperature", "500", Patterns::Double ());
+    prm.declare_entry ("Heat Transfer Coefficient", "1e3", Patterns::Double ());
+    prm.declare_entry ("Extrapolation Method", "0", Patterns::Integer ());
+    
+    if (temp_dep)
+    {
+        // Get Number of Temperature Points for Each Material
+        prm.enter_subsection ("Number of Temperature Points");
+        
+          for (unsigned int m = 0; m < n_materials; ++m)
+          {
+            const unsigned int dm (Utilities::needed_digits(m+1));
+            prm.declare_entry ("Material " + Utilities::int_to_string(m+1,dm) + " Thermal Conductivity Point Count", "1", Patterns::Integer ());
+            prm.declare_entry ("Material " + Utilities::int_to_string(m+1,dm) + " Heat Capacity Point Count", "1", Patterns::Integer ());
+            prm.declare_entry ("Material " + Utilities::int_to_string(m+1,dm) + " Density Point Count", "1", Patterns::Integer ());
+            
+          }
+        
+        prm.leave_subsection ();
+    }
+    
+    prm.read_input (TH_filename, true);
+        
+    return;
+}
+
+//======================================================================================================================
+// Declare all transient parameters and read file
+void declare_transient_parameters (ParameterHandler &prm, std::string folder_name)
+{
+    // Local Parameter Handler Classes and Other Local Variables
+    ParameterHandler    proj_handler;
+    ParameterHandler    kin_handler;
+    ParameterHandler    TH_handler;
+    unsigned int        synchs;
+    unsigned int        phys_type;
+    unsigned int        n_erg;
+    unsigned int        n_prec;
+       
+    std::string proj_filename = folder_name + "project.prm"; 
+    std::string kin_filename = folder_name + "kinetics.prm";
+    std::string TH_filename = folder_name + "TH.prm";
+    std::string trans_filename = folder_name + "transient.prm";
+    
+    declare_project_parameters (proj_handler, folder_name);
+    
+    synchs = proj_handler.get_integer ("Number Synch Points");
+    phys_type = proj_handler.get_integer ("Physics Type");
+        
+    // Determine Physics Type
+    switch (phys_type)
+    {
+      case 0:
+        phys_type = Constants::Physics_Neutronics_Only;
+        declare_kinetics_parameters (kin_handler, folder_name);
+        n_erg = kin_handler.get_integer ("n_erg");
+        n_prec = kin_handler.get_integer ("n_prec");
+        break;
+      case 1:
+        phys_type = Constants::Physics_TH_Only;
+        declare_TH_parameters (TH_handler, folder_name);
+        break;
+      case 2:
+        phys_type = Constants::Physics_Both;
+        declare_kinetics_parameters (kin_handler, folder_name);
+        declare_TH_parameters (TH_handler, folder_name);
+        n_erg = kin_handler.get_integer ("n_erg");
+        n_prec = kin_handler.get_integer ("n_prec");
+        break;
+    }
+    
+    // Get Final Time
+    prm.declare_entry ("Final Time", "0.0", Patterns::Double ());
+    
+    for (unsigned int i = 1; i <= synchs; ++i)
+    {
+      const std::string section_name = "Synch Point " + Utilities::int_to_string(i,Utilities::needed_digits(i));
+      prm.enter_subsection (section_name);
+      
+        // Common Input Parameters
+        prm.declare_entry ("Time", "0.0", Patterns::Double ());
+        prm.declare_entry ("Master Time Step", "0.0", Patterns::Double ());
+        prm.declare_entry ("Physics Coupling", "0", Patterns::Integer ());
+        prm.declare_entry ("Master Time Step Selection", "0", Patterns::Integer ());
+        prm.declare_entry ("Error Tolerance", "1e-10", Patterns::Double ());
+        
+        // Kinetics Terms
+        if (phys_type == Constants::Physics_Neutronics_Only || phys_type == Constants::Physics_Both)
+        {
+          prm.declare_entry ("Master Kinetics Time Step", "0.0", Patterns::Double ());
+          prm.declare_entry ("Kinetics Adaptive Error Tolerance", "1e-3", Patterns::Double ());
+          prm.declare_entry ("Kinetics Max Time Step", "1.0", Patterns::Double ());
+          prm.declare_entry ("Kinetics Min Time Step", "1.0e-5", Patterns::Double ());
+          prm.declare_entry ("Kinetics Coupling", "0", Patterns::Integer ());
+          prm.declare_entry ("Kinetics Time Step Selection", "0", Patterns::Integer ());
+          prm.declare_entry ("Kinetics Time Step Estimator", "0", Patterns::Integer ());
+          prm.declare_entry ("Change Kinetics Mesh", "false", Patterns::Bool ());
+          for (unsigned int group = 0; group < n_erg; ++group)
+            prm.declare_entry ("Kinetics Time Step Group " + Utilities::int_to_string(group+1,Utilities::needed_digits(group+1)), "0.0", Patterns::Double ());
+        }
+        
+        // TH Terms
+        if (phys_type == Constants::Physics_TH_Only || phys_type == Constants::Physics_Both)
+        {
+          prm.declare_entry ("Master TH Time Step", "0.0", Patterns::Double ());
+          prm.declare_entry ("TH Adaptive Error Tolerance", "1e-3", Patterns::Double ());
+          prm.declare_entry ("TH Max Time Step", "1.0", Patterns::Double ());
+          prm.declare_entry ("TH Min Time Step", "1.0e-5", Patterns::Double ());
+          prm.declare_entry ("TH Coupling", "0", Patterns::Integer ());
+          prm.declare_entry ("TH Time Step Selection", "0", Patterns::Integer ());
+          prm.declare_entry ("TH Time Step Estimator", "0", Patterns::Integer ());
+          prm.declare_entry ("Change TH Mesh", "false", Patterns::Bool ());
+        }
+        
+      prm.leave_subsection ();
+    }
+    
+    prm.read_input (trans_filename, true);
+        
+    return;
+}
+
+//======================================================================================================================
+// Declare all non-temperature dependent cross section data
+void declare_kinetics_XS (ParameterHandler &prm, std::string folder_name)
+{
+    // Local Parameter Handler Classes and Other Local Variables
+    ParameterHandler    proj_handler;
+    ParameterHandler    kin_handler;
+    unsigned int        n_mat, n_erg, n_prec;
+    
+    std::string proj_filename = folder_name + "project.prm";
+    std::string kin_filename = folder_name + "kinetics.prm";
+    std::string XS_filename = folder_name + "XS_data.prm";
+    
+    declare_project_parameters (proj_handler, folder_name);
+    declare_kinetics_parameters (kin_handler, folder_name);
+    
+    n_mat = proj_handler.get_integer ("n_materials");
+    n_erg = kin_handler.get_integer ("n_erg");
+    n_prec = kin_handler.get_integer ("n_prec");
+    
+    // Declare all material properties
+    for (unsigned int mat=0; mat<n_mat; ++mat)
+    {
+        const unsigned int dm = Utilities::needed_digits(mat+1);
+        prm.enter_subsection ("Material " + Utilities::int_to_string(mat+1,dm));
+            
+            // Diffusion Coefficients
+            for (unsigned int group = 0; group < n_erg; ++group)
+              prm.declare_entry ("Diffusion "+ Utilities::int_to_string(group+1,Utilities::needed_digits(group+1)), 
+                "1.0", Patterns::Double ());
+            
+            // Removal Cross Sections
+            for (unsigned int group = 0; group < n_erg; ++group)
+              prm.declare_entry ("Removal "+ Utilities::int_to_string(group+1,Utilities::needed_digits(group+1)), 
+                "1.0", Patterns::Double ());
+            
+            // Production Cross Sections
+            for (unsigned int group = 0; group < n_erg; ++group)
+              prm.declare_entry ("Production "+ Utilities::int_to_string(group+1,Utilities::needed_digits(group+1)), 
+                "0.0", Patterns::Double ());
+            
+            // Chi Factors
+            for (unsigned int group = 0; group < n_erg; ++group)
+              prm.declare_entry ("Chi "+ Utilities::int_to_string(group+1,Utilities::needed_digits(group+1)), 
+                "0.0", Patterns::Double ());
+            
+            // Delayed Chi Factors
+            for (unsigned int prec=0; prec < n_prec; ++prec)
+              for (unsigned int group = 0; group < n_erg; ++group)
+                prm.declare_entry ("Delayed Chi from Precursor " + Utilities::int_to_string(prec+1,Utilities::needed_digits(prec+1)) 
+                    + " to Group " + Utilities::int_to_string(group+1,Utilities::needed_digits(group+1)), "0.0", Patterns::Double ());
+            
+            // Nu Values
+            for (unsigned int group = 0; group < n_erg; ++group)
+              prm.declare_entry ("Nu "+ Utilities::int_to_string(group+1,Utilities::needed_digits(group+1)), "2.5", Patterns::Double ());
+            
+            // Downscattering Cross Sections
+            for (unsigned int i = 0; i < n_erg; ++i) {
+              const unsigned int ii (i+1);
+              const unsigned int di (Utilities::needed_digits(ii));
+              for (unsigned int j = 0; j < n_erg; ++j) {
+                const unsigned int jj (j+1);
+                const unsigned int dj (Utilities::needed_digits(jj));
+                if (i == j) continue;
+                prm.declare_entry ("Scattering "+ Utilities::int_to_string(ii,di) + " to " + Utilities::int_to_string(jj,dj), "0.0", Patterns::Double ());
+              }
+            }
+            
+        prm.leave_subsection ();
+    }
+    
+    // Declare all Additional Transient Data
+    prm.enter_subsection ("Transient Data");
+        
+        // Velocity Data
+        for (unsigned int group=0; group < n_erg; ++group)
+          prm.declare_entry ("Velocity "+ Utilities::int_to_string(group+1,Utilities::needed_digits(group+1)), "1.0e5", Patterns::Double ());
+        
+        // Lambda and Beta Data
+        for (unsigned int prec=0; prec < n_prec; ++prec)
+        {
+          prm.declare_entry ("Lambda "+ Utilities::int_to_string(prec+1,Utilities::needed_digits(prec+1)), "0.1", Patterns::Double ()); // Lambda Data
+          prm.declare_entry ("Beta "+ Utilities::int_to_string(prec+1,Utilities::needed_digits(prec+1)), "0.001", Patterns::Double ()); // Beta Data
+        }
+        
+    prm.leave_subsection ();
+    
+    // Read Data
+    prm.read_input (XS_filename, true);
+    
+    return;
+}
+
+//======================================================================================================================
+// Declare all temperature dependent cross section data
+void declare_temp_dep_kinetics_XS (ParameterHandler &prm, std::string folder_name)
+{
+    // Local Parameter Handler Classes and Other Local Variables
+    ParameterHandler    proj_handler;
+    ParameterHandler    kin_handler;
+    
+    unsigned int        n_mat, n_erg, n_prec;
+    unsigned int        phys_type;
+    bool                temp_dep;
+    
+    std::string proj_filename = folder_name + "project.prm";
+    std::string kin_filename = folder_name + "kinetics.prm";
+    std::string XS_data_filename = folder_name + "XS_Data/";
+    
+    declare_project_parameters (proj_handler, folder_name);
+    declare_kinetics_parameters (kin_handler, folder_name);
+    
+    n_mat = proj_handler.get_integer ("n_materials");
+    n_erg = kin_handler.get_integer ("n_erg");
+    n_prec = kin_handler.get_integer ("n_prec");
+    
+    // Collect each materials cross-section data
+    kin_handler.enter_subsection ("Number of Temperature Points");
+    for (unsigned int m = 0; m < n_mat; ++m)
+    {
+      std::string   m_num = Utilities::int_to_string(m+1, Utilities::needed_digits(m+1));
+      unsigned int temp_num = kin_handler.get_integer ("Material " + m_num + " Point Count");
+      
+      // Diffusion
+      // ---------
+      for (unsigned int g = 0; g < n_erg; ++g)
+      {
+        std::string     g_num = Utilities::int_to_string(g+1, Utilities::needed_digits(g+1));
+        std::string     sec_name = "Material " + m_num + " Diffusion " + g_num;
+        
+        prm.enter_subsection (sec_name);
+          
+          for (unsigned int i = 0; i < temp_num; ++i)
+          {
+            std::string i_num = Utilities::int_to_string(i+1, Utilities::needed_digits(i+1));
+            prm.declare_entry ("Temperature " + i_num, "1", Patterns::Double ());
+            prm.declare_entry ("Value " + i_num, "1", Patterns::Double ());
+          }
+          
+        prm.leave_subsection ();
+      }
+      
+      // Removal 
+      for (unsigned int g = 0; g < n_erg; ++g)
+      {
+        std::string     g_num = Utilities::int_to_string(g+1, Utilities::needed_digits(g+1));
+        std::string     sec_name = "Material " + m_num + " Removal " + g_num;
+        
+        prm.enter_subsection (sec_name);
+          
+          for (unsigned int i = 0; i < temp_num; ++i)
+          {
+            std::string i_num = Utilities::int_to_string(i+1, Utilities::needed_digits(i+1));
+            prm.declare_entry ("Temperature " + i_num, "1", Patterns::Double ());
+            prm.declare_entry ("Value " + i_num, "1", Patterns::Double ());
+          }
+          
+        prm.leave_subsection ();
+      }
+      
+      // Production 
+      for (unsigned int g = 0; g < n_erg; ++g)
+      {
+        std::string     g_num = Utilities::int_to_string(g+1, Utilities::needed_digits(g+1));
+        std::string     sec_name = "Material " + m_num + " Production " + g_num;
+        
+        prm.enter_subsection (sec_name);
+          
+          for (unsigned int i = 0; i < temp_num; ++i)
+          {
+            std::string i_num = Utilities::int_to_string(i+1, Utilities::needed_digits(i+1));
+            prm.declare_entry ("Temperature " + i_num, "1", Patterns::Double ());
+            prm.declare_entry ("Value " + i_num, "1", Patterns::Double ());
+          }
+          
+        prm.leave_subsection ();
+      }
+      
+      // Scattering 
+      for (unsigned int g = 0; g < n_erg; ++g)
+        for (unsigned int gp = 0; gp < n_erg; ++gp)
+        {
+          if (g == gp) continue;
+          
+          std::string     g_num = Utilities::int_to_string(g+1, Utilities::needed_digits(g+1));
+          std::string     gp_num = Utilities::int_to_string(gp+1, Utilities::needed_digits(gp+1));
+          std::string     sec_name = "Material " + m_num + " Scattering " + g_num + " to " + gp_num;
+          
+          prm.enter_subsection (sec_name);
+            
+            for (unsigned int i = 0; i < temp_num; ++i)
+            {
+              std::string i_num = Utilities::int_to_string(i+1, Utilities::needed_digits(i+1));
+              prm.declare_entry ("Temperature " + i_num, "1", Patterns::Double ());
+              prm.declare_entry ("Value " + i_num, "1", Patterns::Double ());
+            }
+              
+          prm.leave_subsection ();
+        }
+        
+        // Temperature Independent Data
+        std::string     sec_name = "Material " + m_num + " Temperature Independent Data";
+        prm.enter_subsection (sec_name);
+          
+          for (unsigned int g = 0; g < n_erg; ++g)
+          {
+            std::string g_num = Utilities::int_to_string(g+1, Utilities::needed_digits(g+1));
+            prm.declare_entry ("Chi " + g_num, "1.0", Patterns::Double ());
+            prm.declare_entry ("Nu " + g_num, "1.0", Patterns::Double ());
+            for (unsigned int p = 0; p < n_prec; ++p)
+            {
+              std::string p_num = Utilities::int_to_string(p+1, Utilities::needed_digits(p+1));
+              prm.declare_entry ("Delayed Chi from Precursor " + p_num + " to Group " + g_num, "1.0", Patterns::Double ());
+            }
+          }
+          
+        prm.leave_subsection ();
+    }
+    
+    prm.enter_subsection ("Transient Data");
+      
+      // Velocity Data
+      for (unsigned int group=0; group < n_erg; ++group)
+        prm.declare_entry ("Velocity "+ Utilities::int_to_string(group+1,Utilities::needed_digits(group+1)), "1.0e5", Patterns::Double ());
+      
+      // Lambda and Beta Data
+      for (unsigned int prec=0; prec < n_prec; ++prec)
+      {
+        prm.declare_entry ("Lambda "+ Utilities::int_to_string(prec+1,Utilities::needed_digits(prec+1)), "0.1", Patterns::Double ()); // Lambda Data
+        prm.declare_entry ("Beta "+ Utilities::int_to_string(prec+1,Utilities::needed_digits(prec+1)), "0.001", Patterns::Double ()); // Beta Data
+      }
+      
+    prm.leave_subsection ();
+    
+    kin_handler.leave_subsection ();
+    
+    for (unsigned int m = 0; m < n_mat; ++m)
+    {
+      std::string   m_filename = XS_data_filename + "Material_" + Utilities::int_to_string(m+1, Utilities::needed_digits(m+1)) + ".prm";
+      prm.read_input (m_filename, true);
+    }
+    prm.read_input (XS_data_filename + "Physics_Data.prm", true);
+    
+    return;
+}
+
+//======================================================================================================================
+// Declare all non-temperature dependent Thermophysical Data
+void declare_TH_data (ParameterHandler &prm, std::string folder_name)
+{
+    // Local Parameter Handler Classes and Other Local Variables
+    ParameterHandler    proj_handler;
+    unsigned int        n_materials;
+    unsigned int        phys_type;
+    bool                temp_dep;
+    
+    std::string proj_filename = folder_name + "project.prm";
+    std::string TH_data_filename = folder_name + "TH_data.prm";
+    
+    declare_project_parameters (proj_handler, folder_name);
+    
+    n_materials = proj_handler.get_integer ("n_materials");
+    phys_type = proj_handler.get_integer ("Physics Type");
+    temp_dep = proj_handler.get_bool ("Temperature Dependence");
+    
+    // Declare all material properties
+    for (unsigned int mat=0; mat<n_materials; ++mat)
+    {
+      prm.enter_subsection ("Material " + Utilities::int_to_string(mat+1,Utilities::needed_digits(mat+1)));
+        
+        prm.declare_entry ("Thermal Conductivity", "0.1", Patterns::Double ());
+        prm.declare_entry ("Heat Capacity", "1e3", Patterns::Double ());
+        prm.declare_entry ("Density", "10980", Patterns::Double ());
+        
+      prm.leave_subsection ();
+    } 
+    
+    prm.read_input (TH_data_filename);
+    
+    return;
+}
+
+//======================================================================================================================
+// Declare all temperature dependent Thermophysical Data
+void declare_temp_dep_TH_data (ParameterHandler &prm, std::string folder_name)
+{
+    // Local Parameter Handler Classes and Other Local Variables
+    ParameterHandler    proj_handler;
+    ParameterHandler    TH_handler;
+    unsigned int        n_materials;
+    unsigned int        phys_type;
+    bool                temp_dep;
+    
+    std::string proj_filename = folder_name + "project.prm";
+    std::string TH_filename = folder_name + "TH.prm";
+    std::string TH_data_filename = folder_name + "TH_Data/";
+    
+    std::string TH_thermal_conductivity_filename = TH_data_filename + "Thermal_Conductivity.prm";
+    std::string TH_heat_capacity_filename = TH_data_filename + "Heat_Capacity.prm";
+    std::string TH_density_filename = TH_data_filename + "Density.prm";
+    
+    declare_project_parameters (proj_handler, folder_name);
+    declare_TH_parameters (TH_handler, folder_name);
+    
+    n_materials = proj_handler.get_integer ("n_materials");
+    phys_type = proj_handler.get_integer ("Physics Type");
+    temp_dep = proj_handler.get_bool ("Temperature Dependence");
+    
+    TH_handler.enter_subsection("Number of Temperature Points");
+    
+    for (unsigned int m = 0; m < n_materials; ++m)
+    {
+      std::string   m_filename = folder_name + "Material_" + Utilities::int_to_string(m+1, Utilities::needed_digits(m+1)) + ".prm";
+      std::string   m_num = Utilities::int_to_string(m+1, Utilities::needed_digits(m+1));
+      
+      // Thermal Conductivity
+      prm.enter_subsection ("Material " + m_num + " Thermal Conductivity");
+      
+        const unsigned int k_num (TH_handler.get_integer ("Material " + m_num + " Thermal Conductivity Point Count"));
+        for (unsigned int i = 0; i < k_num; ++i)
+        {
+          prm.declare_entry ("Temperature " + Utilities::int_to_string(i+1,Utilities::needed_digits(i+1)),"1.0", Patterns::Double ());
+          prm.declare_entry ("Value " + Utilities::int_to_string(i+1,Utilities::needed_digits(i+1)),"1.0", Patterns::Double ());
+        }
+        
+      prm.leave_subsection ();
+      
+      // Heat Capacity
+      prm.enter_subsection ("Material " + m_num + " Heat Capacity");
+      
+        const unsigned int Cp_num (TH_handler.get_integer ("Material " + m_num + " Heat Capacity Point Count"));
+        for (unsigned int i = 0; i < Cp_num; ++i)
+        {
+          prm.declare_entry ("Temperature " + Utilities::int_to_string(i+1,Utilities::needed_digits(i+1)),"1.0", Patterns::Double ());
+          prm.declare_entry ("Value " + Utilities::int_to_string(i+1,Utilities::needed_digits(i+1)),"1.0", Patterns::Double ());
+        }
+        
+      prm.leave_subsection ();
+      
+      // Density
+      prm.enter_subsection ("Material " + m_num + " Density");
+      
+        const unsigned int dens_num (TH_handler.get_integer ("Material " + m_num + " Density Point Count"));
+        for (unsigned int i = 0; i < dens_num; ++i)
+        {
+          prm.declare_entry ("Temperature " + Utilities::int_to_string(i+1,Utilities::needed_digits(i+1)),"1.0", Patterns::Double ());
+          prm.declare_entry ("Value " + Utilities::int_to_string(i+1,Utilities::needed_digits(i+1)),"1.0", Patterns::Double ());
+        }
+        
+      prm.leave_subsection ();
+      
+    }
+    
+    TH_handler.leave_subsection ();
+    
+    for (unsigned int m = 0; m < n_materials; ++m)
+    {
+      std::string   m_filename = TH_data_filename + "Material_" + Utilities::int_to_string(m+1, Utilities::needed_digits(m+1)) + ".prm";
+      prm.read_input (m_filename, true);
+    }
+    
+    return;
+}
+
+//======================================================================================================================
+// Get the Project Dimension
+unsigned int get_project_dimension (std::string proj_name)
+{
+    unsigned int ndim;
+    ParameterHandler prm;
+    std::string full_name = proj_name + "project.prm";
+    //std::string full_name = Constants::input_str + proj_name;
+    //std::string full_name = Constants::input_str + proj_name + "project.prm";
+    
+    declare_project_parameters (prm, proj_name);
+    ndim = prm.get_integer ("ndim");
+    
+    return ndim;
+}
+
+//======================================================================================================================
+// Get Finite Element Degree
+unsigned int get_fe_degree (std::string proj_name)
+{
+    unsigned int fe_degree;
+    ParameterHandler prm;
+    std::string full_name = proj_name + "project.prm";
+    //std::string full_name = Constants::input_str + proj_name;
+    //std::string full_name = Constants::input_str + proj_name + "project.prm";
+    
+    declare_project_parameters (prm, proj_name);
+    fe_degree = prm.get_integer ("FE degree");
+    
+    return fe_degree;
+}
+
+#endif

@@ -1,0 +1,32 @@
+//#ifndef QS_TOOLS_H
+//#define QS_TOOLS_H
+
+//Global Headers
+#include "../Global/GlobalHeaders.h"
+#include "../Global/Deal2Headers.h"
+#include "../Global/Constants.h"
+
+//======================================================================================================================
+// update PCQS amplitudes
+template <int dim>
+void Neutronics<dim>::update_PCQS_amplitude ()
+{
+  // Local Variables
+  unsigned int n_dim;
+  
+  return;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+//#endif
